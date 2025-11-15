@@ -39,73 +39,112 @@ def get_hand_size(hand_landmarks, mp_hands):
     return ((wrist.x - middle_mcp.x) ** 2 + (wrist.y - middle_mcp.y) ** 2) ** 0.5
 
 
+def calculate_angle(p1, p2, p3):
+    """
+    Calculate the angle at p2 formed by points p1-p2-p3.
+    Returns angle in radians (0 to π).
+    """
+    # Create vectors from p2 to p1 and p2 to p3
+    v1 = np.array([p1.x - p2.x, p1.y - p2.y, p1.z - p2.z])
+    v2 = np.array([p3.x - p2.x, p3.y - p2.y, p3.z - p2.z])
+    
+    # Calculate dot product and magnitudes
+    dot_product = np.dot(v1, v2)
+    mag1 = np.linalg.norm(v1)
+    mag2 = np.linalg.norm(v2)
+    
+    # Avoid division by zero
+    if mag1 == 0 or mag2 == 0:
+        return math.pi
+    
+    # Calculate angle using arccos
+    cos_angle = dot_product / (mag1 * mag2)
+    # Clamp to [-1, 1] to avoid numerical errors
+    cos_angle = max(-1.0, min(1.0, cos_angle))
+    angle = math.acos(cos_angle)
+    
+    return angle
+
+
 def get_hand_closedness(hand_landmarks, mp_hands):
     # Get landmarks
     landmarks = hand_landmarks.landmark
 
-    hand_size = get_hand_size(hand_landmarks, mp_hands)
-    max_distance = hand_size * 0.75
-
-    # Define finger tip, MCP (metacarpophalangeal), and PIP (proximal interphalangeal) joints
+    # Define finger joints: (tip, pip, dip, mcp) for each finger
+    # For thumb: (TIP, IP, MCP, CMC)
+    # For others: (TIP, PIP, DIP, MCP)
     finger_data = [
-        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_IP, mp_hands.HandLandmark.THUMB_MCP),
+        # Thumb: TIP, IP, MCP, CMC
+        (
+            mp_hands.HandLandmark.THUMB_TIP,
+            mp_hands.HandLandmark.THUMB_IP,
+            mp_hands.HandLandmark.THUMB_MCP,
+            mp_hands.HandLandmark.THUMB_CMC,
+        ),
+        # Index: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.INDEX_FINGER_TIP,
-            mp_hands.HandLandmark.INDEX_FINGER_MCP,
             mp_hands.HandLandmark.INDEX_FINGER_PIP,
+            mp_hands.HandLandmark.INDEX_FINGER_DIP,
+            mp_hands.HandLandmark.INDEX_FINGER_MCP,
         ),
+        # Middle: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
-            mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
             mp_hands.HandLandmark.MIDDLE_FINGER_PIP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_DIP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
         ),
+        # Ring: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.RING_FINGER_TIP,
-            mp_hands.HandLandmark.RING_FINGER_MCP,
             mp_hands.HandLandmark.RING_FINGER_PIP,
+            mp_hands.HandLandmark.RING_FINGER_DIP,
+            mp_hands.HandLandmark.RING_FINGER_MCP,
         ),
+        # Pinky: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.PINKY_TIP,
-            mp_hands.HandLandmark.PINKY_MCP,
             mp_hands.HandLandmark.PINKY_PIP,
+            mp_hands.HandLandmark.PINKY_DIP,
+            mp_hands.HandLandmark.PINKY_MCP,
         ),
     ]
 
     finger_closedness_values = []
 
-    for tip_idx, mcp_idx, pip_idx in finger_data:
+    for tip_idx, pip_idx, dip_idx, mcp_idx in finger_data:
         tip = landmarks[tip_idx]
-        mcp = landmarks[mcp_idx]
         pip = landmarks[pip_idx]
+        dip = landmarks[dip_idx]
+        mcp = landmarks[mcp_idx]
 
-        # Calculate Euclidean distance in 2D space (x, y only) to be rotation-invariant
-        # The z-coordinate (depth) varies with rotation and doesn't indicate finger bend
-        distance = ((tip.x - mcp.x) ** 2 + (tip.y - mcp.y) ** 2) ** 0.5
-
-        # Check if finger tip is below the PIP joint (curled down)
-        # In image coordinates, higher y means lower on screen
-        tip_below_pip = tip.y > pip.y
+        # Calculate angles at key joints
+        # For thumb: angle at IP joint (MCP-IP-TIP)
+        # For others: angle at PIP joint (MCP-PIP-DIP) and angle at DIP joint (PIP-DIP-TIP)
         
-        # Check if finger tip is below the MCP joint (very curled)
-        tip_below_mcp = tip.y > mcp.y
+        if tip_idx == mp_hands.HandLandmark.THUMB_TIP:
+            # Thumb: use angle at IP joint (MCP-IP-TIP)
+            # Note: for thumb, pip_idx is IP, dip_idx is MCP
+            angle_ip = calculate_angle(dip, pip, tip)  # MCP-IP-TIP
+            # For thumb, a closed finger has a smaller angle (more bent)
+            # Open thumb: ~180 degrees (π radians), Closed thumb: ~90 degrees (π/2 radians)
+            # Normalize: angle of π/2 (90°) = 1.0 (closed), angle of π (180°) = 0.0 (open)
+            normalized_angle = 1.0 - (angle_ip - math.pi / 2) / (math.pi / 2)
+            closedness = max(0.0, min(1.0, normalized_angle))
+        else:
+            # Other fingers: use angles at PIP and DIP joints
+            angle_pip = calculate_angle(mcp, pip, dip)  # Angle at PIP joint
+            angle_dip = calculate_angle(pip, dip, tip)  # Angle at DIP joint
+            
+            # Average the two angles for a more robust measure
+            avg_angle = (angle_pip + angle_dip) / 2.0
+            
+            # Open finger: ~180 degrees (π radians), Closed finger: ~90 degrees (π/2 radians)
+            # Normalize: angle of π/2 (90°) = 1.0 (closed), angle of π (180°) = 0.0 (open)
+            normalized_angle = 1.0 - (avg_angle - math.pi / 2) / (math.pi / 2)
+            closedness = max(0.0, min(1.0, normalized_angle))
 
-        # Normalize distance to 0-1 range and invert (smaller distance = more closed = higher value)
-        # Use adaptive max_distance based on hand size
-        normalized_distance = min(distance / max_distance, 1.0)
-        closedness = 1.0 - normalized_distance
-
-        # Boost closedness if finger is curled down past PIP joint
-        # This handles the case where fingers are very closed but distance might not reflect it
-        if tip_below_pip:
-            # If tip is below PIP, it's definitely curled - boost closedness
-            closedness = max(closedness, 0.7)
-        
-        # If tip is below MCP, it's very tightly closed
-        if tip_below_mcp:
-            closedness = max(closedness, 0.9)
-
-        # Clamp to 0-1 range
-        closedness = max(0.0, min(1.0, closedness))
         finger_closedness_values.append(closedness)
 
     # Average across all fingers to get overall hand closedness
