@@ -6,8 +6,8 @@ import sys
 import os
 import warnings
 import math
-import numpy as np               # <-- ADDED
-from djitellopy import Tello   # <-- ADDED
+import numpy as np
+from djitellopy import Tello
 
 
 def list_video_devices():
@@ -47,22 +47,22 @@ def calculate_angle(p1, p2, p3):
     # Create vectors from p2 to p1 and p2 to p3
     v1 = np.array([p1.x - p2.x, p1.y - p2.y, p1.z - p2.z])
     v2 = np.array([p3.x - p2.x, p3.y - p2.y, p3.z - p2.z])
-    
+
     # Calculate dot product and magnitudes
     dot_product = np.dot(v1, v2)
     mag1 = np.linalg.norm(v1)
     mag2 = np.linalg.norm(v2)
-    
+
     # Avoid division by zero
     if mag1 == 0 or mag2 == 0:
         return math.pi
-    
+
     # Calculate angle using arccos
     cos_angle = dot_product / (mag1 * mag2)
     # Clamp to [-1, 1] to avoid numerical errors
     cos_angle = max(-1.0, min(1.0, cos_angle))
     angle = math.acos(cos_angle)
-    
+
     return angle
 
 
@@ -122,7 +122,7 @@ def get_hand_closedness(hand_landmarks, mp_hands):
         # Calculate angles at key joints
         # For thumb: angle at IP joint (MCP-IP-TIP)
         # For others: angle at PIP joint (MCP-PIP-DIP) and angle at DIP joint (PIP-DIP-TIP)
-        
+
         if tip_idx == mp_hands.HandLandmark.THUMB_TIP:
             # Thumb: use angle at IP joint (MCP-IP-TIP)
             # Note: for thumb, pip_idx is IP, dip_idx is MCP
@@ -136,10 +136,10 @@ def get_hand_closedness(hand_landmarks, mp_hands):
             # Other fingers: use angles at PIP and DIP joints
             angle_pip = calculate_angle(mcp, pip, dip)  # Angle at PIP joint
             angle_dip = calculate_angle(pip, dip, tip)  # Angle at DIP joint
-            
+
             # Average the two angles for a more robust measure
             avg_angle = (angle_pip + angle_dip) / 2.0
-            
+
             # Open finger: ~180 degrees (π radians), Closed finger: ~90 degrees (π/2 radians)
             # Normalize: angle of π/2 (90°) = 1.0 (closed), angle of π (180°) = 0.0 (open)
             normalized_angle = 1.0 - (avg_angle - math.pi / 2) / (math.pi / 2)
@@ -209,24 +209,26 @@ def select_video_device():
     list_video_devices()
     return int(input("Enter device ID: "))
 
+
 # --- ADDED: Helper function for drone mode ---
 def _map_value(x, in_min, in_max, out_min, out_max):
     """Helper function to map a value from one range to another."""
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
 
+
 # --- ADDED: Mode Selection ---
-mode = "hand" # Default
+mode = "hand"  # Default
 if len(sys.argv) > 1 and sys.argv[1].lower() == "drone":
     mode = "drone"
     # Remove "drone" arg so it doesn't confuse select_video_device
-    sys.argv.pop(1) 
+    sys.argv.pop(1)
 print(f"Running in {mode} mode.")
 
 # --- ADDED: Tello Drone Setup ---
 tello = None
 frame_read = None
-frame_width = 960 # default
-frame_height = 720 # default
+frame_width = 960  # default
+frame_height = 720  # default
 
 # --- ADDED: OpenCV Color Tuning ---
 # Tune these HSV values for your red marker!
@@ -331,7 +333,9 @@ while running:
 
                 # Calculate how closed the hand is (0.0 = open, 1.0 = closed)
                 hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
-                hand_closedness = max(min_closedness, min(max_closedness, hand_closedness))
+                hand_closedness = max(
+                    min_closedness, min(max_closedness, hand_closedness)
+                )
                 hand_closedness = (hand_closedness - min_closedness) / (
                     max_closedness - min_closedness
                 )
@@ -344,14 +348,18 @@ while running:
                     max_rotation - min_rotation
                 )
                 # Draw landmarks on the frame
-                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                mp_drawing.draw_landmarks(
+                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
+                )
 
                 index_finger_tip = hand_landmarks.landmark[
                     mp_hands.HandLandmark.INDEX_FINGER_TIP
                 ]
 
                 x = max(padding, min(1.0 - padding, index_finger_tip.x))
-                y = max(vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y))
+                y = max(
+                    vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y)
+                )
                 x -= padding
                 y -= vertical_padding
                 x /= 1.0 - 2 * padding
@@ -401,16 +409,16 @@ while running:
 
             # Display the frame
             cv2.imshow("Hand Tracking", frame)
-            
+
         else:
             # --- ADDED: DRONE TRACKING LOGIC ---
-            
+
             # 1. GET DRONE DATA
             z_cm = tello.get_height()
             frame = frame_read.frame
             if frame is None:
                 continue
-            
+
             # 2. OPENCV POSITIONING
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mask1 = cv2.inRange(hsv, LOWER_RED_1, UPPER_RED_1)
@@ -418,10 +426,12 @@ while running:
             mask = mask1 + mask2
             mask = cv2.erode(mask, None, iterations=2)
             mask = cv2.dilate(mask, None, iterations=2)
-            contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            x_norm, y_norm, z_norm = 0.5, 0.5, 0.0 # Default
-            
+            contours, _ = cv2.findContours(
+                mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+
+            x_norm, y_norm, z_norm = 0.5, 0.5, 0.0  # Default
+
             if len(contours) > 0:
                 c = max(contours, key=cv2.contourArea)
                 M = cv2.moments(c)
@@ -431,24 +441,26 @@ while running:
                     x_norm = x_px / frame_width
                     y_norm = y_px / frame_height
                     cv2.circle(frame, (x_px, y_px), 10, (0, 255, 0), 2)
-            
+
             # Map 30cm (low) to 150cm (high) -> 0.0 (silent) to 1.0 (loud)
             z_norm = _map_value(z_cm, 30, 150, 0.0, 1.0)
             z_norm = max(0.0, min(1.0, z_norm))
-            
+
             # 3. POPULATE KNOB VALUES
-            knob_values[0] = max(0, min(127, int(x_norm * 127))) # X-Axis
-            knob_values[1] = max(0, min(127, int(y_norm * 127))) # Y-Axis
-            knob_values[2] = max(0, min(127, int(z_norm * 127))) # Z-Axis (Volume)
-            knob_values[3] = 0 # Knob 3 is unused in this mode
-            
+            knob_values[0] = max(0, min(127, int(x_norm * 127)))  # X-Axis
+            knob_values[1] = max(0, min(127, int(y_norm * 127)))  # Y-Axis
+            knob_values[2] = max(0, min(127, int(z_norm * 127)))  # Z-Axis (Volume)
+            knob_values[3] = 0  # Knob 3 is unused in this mode
+
             # 4. DEBUG VIEW
             debug_text = f"X: {x_norm:.2f} Y: {y_norm:.2f} Z: {z_norm:.2f}"
-            cv2.putText(frame, debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(
+                frame, debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+            )
             cv2.imshow("Tello Drone Positioning", frame)
-            
+
         # --- COMMON LOGIC (Runs for both modes) ---
-        
+
         # Send MIDI
         midiout.send_message([0xB0, 0, knob_values[0]])
         midiout.send_message([0xB0, 1, knob_values[1]])
@@ -460,14 +472,14 @@ while running:
             running = False
 
         time.sleep(dt)
-        
+
     except KeyboardInterrupt:
         running = False
     except Exception as e:
         print("Error:", e)
         # Don't set running to False, allow loop to retry
-        # running = False 
-        time.sleep(1) # sleep to avoid spamming errors
+        # running = False
+        time.sleep(1)  # sleep to avoid spamming errors
 
 # --- MODIFIED: Cleanup logic ---
 if mode == "hand":
