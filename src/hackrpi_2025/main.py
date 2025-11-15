@@ -69,7 +69,6 @@ def get_hand_closedness(hand_landmarks, mp_hands):
 
         # Normalize distance to 0-1 range and invert (smaller distance = more closed = higher value)
         # Use adaptive max_distance based on hand size
-        print(f"distance: {distance}, max_distance: {max_distance}")
         normalized_distance = min(distance / max_distance, 1.0)
         closedness = 1.0 - normalized_distance
 
