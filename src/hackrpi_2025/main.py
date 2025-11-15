@@ -30,16 +30,18 @@ def list_video_devices():
     return available_devices
 
 
+def get_hand_size(hand_landmarks, mp_hands):
+    landmarks = hand_landmarks.landmark
+    wrist = landmarks[mp_hands.HandLandmark.WRIST]
+    middle_mcp = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    return ((wrist.x - middle_mcp.x) ** 2 + (wrist.y - middle_mcp.y) ** 2) ** 0.5
+
+
 def get_hand_closedness(hand_landmarks, mp_hands):
     # Get landmarks
     landmarks = hand_landmarks.landmark
 
-    # Calculate hand size based on wrist to middle finger MCP distance (2D only)
-    # This distance is relatively stable regardless of finger position or rotation
-    wrist = landmarks[mp_hands.HandLandmark.WRIST]
-    middle_mcp = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
-    hand_size = ((wrist.x - middle_mcp.x) ** 2 + (wrist.y - middle_mcp.y) ** 2) ** 0.5
-
+    hand_size = get_hand_size(hand_landmarks, mp_hands)
     max_distance = hand_size * 0.75
 
     # Define finger tip and MCP (metacarpophalangeal) joint pairs
@@ -172,7 +174,7 @@ hand_rotation = 0.0
 padding = 0.12
 vertical_padding = 0.2
 min_closedness = 0.2
-max_closedness = 0.7
+max_closedness = 0.6
 min_rotation = 0.42
 max_rotation = 0.58
 
@@ -198,72 +200,72 @@ while running:
         hand_rotation = 0.0
 
         if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                # Calculate how closed the hand is (0.0 = open, 1.0 = closed)
-                hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
-                hand_closedness = max(
-                    min_closedness, min(max_closedness, hand_closedness)
-                )
-                hand_closedness = (hand_closedness - min_closedness) / (
-                    max_closedness - min_closedness
-                )
-                hand_openness = 1.0 - hand_closedness
+            sizes = [
+                get_hand_size(hand_landmarks, mp_hands)
+                for hand_landmarks in results.multi_hand_landmarks
+            ]
+            max_index = sizes.index(max(sizes))
+            hand_landmarks = results.multi_hand_landmarks[max_index]
 
-                # Calculate hand rotation (0.0 to 1.0)
-                hand_rotation = get_hand_rotation(hand_landmarks, mp_hands)
-                hand_rotation = max(min_rotation, min(max_rotation, hand_rotation))
-                hand_rotation = (hand_rotation - min_rotation) / (
-                    max_rotation - min_rotation
-                )
-                # Draw landmarks on the frame
-                mp_drawing.draw_landmarks(
-                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
-                )
+            # Calculate how closed the hand is (0.0 = open, 1.0 = closed)
+            hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
+            hand_closedness = max(min_closedness, min(max_closedness, hand_closedness))
+            hand_closedness = (hand_closedness - min_closedness) / (
+                max_closedness - min_closedness
+            )
+            hand_openness = 1.0 - hand_closedness
 
-                index_finger_tip = hand_landmarks.landmark[
-                    mp_hands.HandLandmark.INDEX_FINGER_TIP
-                ]
+            # Calculate hand rotation (0.0 to 1.0)
+            hand_rotation = get_hand_rotation(hand_landmarks, mp_hands)
+            hand_rotation = max(min_rotation, min(max_rotation, hand_rotation))
+            hand_rotation = (hand_rotation - min_rotation) / (
+                max_rotation - min_rotation
+            )
+            # Draw landmarks on the frame
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-                x = max(padding, min(1.0 - padding, index_finger_tip.x))
-                y = max(
-                    vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y)
-                )
-                x -= padding
-                y -= vertical_padding
-                x /= 1.0 - 2 * padding
-                y /= 1.0 - 2 * vertical_padding
+            index_finger_tip = hand_landmarks.landmark[
+                mp_hands.HandLandmark.INDEX_FINGER_TIP
+            ]
 
-                # Convert normalized coordinates to pixel coordinates
-                tip_x = int(index_finger_tip.x * frame_width)
-                tip_y = int(index_finger_tip.y * frame_height)
+            x = max(padding, min(1.0 - padding, index_finger_tip.x))
+            y = max(vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y))
+            x -= padding
+            y -= vertical_padding
+            x /= 1.0 - 2 * padding
+            y /= 1.0 - 2 * vertical_padding
 
-                circle_color = (255, 0, 0)
-                cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
+            # Convert normalized coordinates to pixel coordinates
+            tip_x = int(index_finger_tip.x * frame_width)
+            tip_y = int(index_finger_tip.y * frame_height)
 
-                # Draw padding boundary rectangle (convert to integers)
-                padding_x1 = int(frame_width * padding)
-                padding_y1 = int(frame_height * vertical_padding)
-                padding_x2 = int(frame_width * (1 - padding))
-                padding_y2 = int(frame_height * (1 - vertical_padding))
-                cv2.rectangle(
-                    frame,
-                    (padding_x1, padding_y1),
-                    (padding_x2, padding_y2),
-                    (0, 255, 0),
-                    2,
-                )
+            circle_color = (255, 0, 0)
+            cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
 
-                # Display hand closedness and rotation on frame
-                hand_state_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
-                cv2.putText(
-                    frame,
-                    hand_state_text,
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    circle_color,
-                    2,
-                )
+            # Draw padding boundary rectangle (convert to integers)
+            padding_x1 = int(frame_width * padding)
+            padding_y1 = int(frame_height * vertical_padding)
+            padding_x2 = int(frame_width * (1 - padding))
+            padding_y2 = int(frame_height * (1 - vertical_padding))
+            cv2.rectangle(
+                frame,
+                (padding_x1, padding_y1),
+                (padding_x2, padding_y2),
+                (0, 255, 0),
+                2,
+            )
+
+            # Display hand closedness and rotation on frame
+            hand_state_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
+            cv2.putText(
+                frame,
+                hand_state_text,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                circle_color,
+                2,
+            )
         else:
             hand_openness = 0.0
             hand_rotation = 0.0
