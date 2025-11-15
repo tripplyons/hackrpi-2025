@@ -1,0 +1,20 @@
+[project]
+name = "hackrpi-2025"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tripp Lyons", email = "tripplyons@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.3.4",
+    "python-rtmidi>=1.5.8",
+]
+
+[project.scripts]
+hackrpi-2025 = "hackrpi_2025:main"
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10.0"]
+build-backend = "uv_build"
