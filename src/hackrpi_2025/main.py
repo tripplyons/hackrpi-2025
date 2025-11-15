@@ -44,35 +44,63 @@ def get_hand_closedness(hand_landmarks, mp_hands):
     hand_size = get_hand_size(hand_landmarks, mp_hands)
     max_distance = hand_size * 0.75
 
-    # Define finger tip and MCP (metacarpophalangeal) joint pairs
-    finger_pairs = [
-        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_IP),
+    # Define finger tip, MCP (metacarpophalangeal), and PIP (proximal interphalangeal) joints
+    finger_data = [
+        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_IP, mp_hands.HandLandmark.THUMB_MCP),
         (
             mp_hands.HandLandmark.INDEX_FINGER_TIP,
             mp_hands.HandLandmark.INDEX_FINGER_MCP,
+            mp_hands.HandLandmark.INDEX_FINGER_PIP,
         ),
         (
             mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
             mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_PIP,
         ),
-        (mp_hands.HandLandmark.RING_FINGER_TIP, mp_hands.HandLandmark.RING_FINGER_MCP),
-        (mp_hands.HandLandmark.PINKY_TIP, mp_hands.HandLandmark.PINKY_MCP),
+        (
+            mp_hands.HandLandmark.RING_FINGER_TIP,
+            mp_hands.HandLandmark.RING_FINGER_MCP,
+            mp_hands.HandLandmark.RING_FINGER_PIP,
+        ),
+        (
+            mp_hands.HandLandmark.PINKY_TIP,
+            mp_hands.HandLandmark.PINKY_MCP,
+            mp_hands.HandLandmark.PINKY_PIP,
+        ),
     ]
 
     finger_closedness_values = []
 
-    for tip_idx, mcp_idx in finger_pairs:
+    for tip_idx, mcp_idx, pip_idx in finger_data:
         tip = landmarks[tip_idx]
         mcp = landmarks[mcp_idx]
+        pip = landmarks[pip_idx]
 
         # Calculate Euclidean distance in 2D space (x, y only) to be rotation-invariant
         # The z-coordinate (depth) varies with rotation and doesn't indicate finger bend
         distance = ((tip.x - mcp.x) ** 2 + (tip.y - mcp.y) ** 2) ** 0.5
 
+        # Check if finger tip is below the PIP joint (curled down)
+        # In image coordinates, higher y means lower on screen
+        tip_below_pip = tip.y > pip.y
+        
+        # Check if finger tip is below the MCP joint (very curled)
+        tip_below_mcp = tip.y > mcp.y
+
         # Normalize distance to 0-1 range and invert (smaller distance = more closed = higher value)
         # Use adaptive max_distance based on hand size
         normalized_distance = min(distance / max_distance, 1.0)
         closedness = 1.0 - normalized_distance
+
+        # Boost closedness if finger is curled down past PIP joint
+        # This handles the case where fingers are very closed but distance might not reflect it
+        if tip_below_pip:
+            # If tip is below PIP, it's definitely curled - boost closedness
+            closedness = max(closedness, 0.7)
+        
+        # If tip is below MCP, it's very tightly closed
+        if tip_below_mcp:
+            closedness = max(closedness, 0.9)
 
         # Clamp to 0-1 range
         closedness = max(0.0, min(1.0, closedness))
@@ -173,8 +201,8 @@ hand_rotation = 0.0
 
 padding = 0.12
 vertical_padding = 0.2
-min_closedness = 0.2
-max_closedness = 0.6
+min_closedness = 0.15
+max_closedness = 0.7
 min_rotation = 0.42
 max_rotation = 0.58
 
