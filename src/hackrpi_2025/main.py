@@ -292,8 +292,8 @@ hand_rotation = 0.0
 
 padding = 0.12
 vertical_padding = 0.2
-min_closedness = 0.15
-max_closedness = 0.7
+min_closedness = 0.05
+max_closedness = 0.75
 min_rotation = 0.42
 max_rotation = 0.58
 
