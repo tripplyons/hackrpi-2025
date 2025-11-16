@@ -70,86 +70,76 @@ def get_hand_closedness(hand_landmarks, mp_hands):
     # Get landmarks
     landmarks = hand_landmarks.landmark
 
-    # Define finger joints: (tip, pip, dip, mcp) for each finger
-    # For thumb: (TIP, IP, MCP, CMC)
-    # For others: (TIP, PIP, DIP, MCP)
+    hand_size = get_hand_size(hand_landmarks, mp_hands)
+    max_distance = hand_size * 0.75
+
+    # Define finger tip, MCP (metacarpophalangeal), and PIP (proximal interphalangeal) joints
     finger_data = [
-        # Thumb: TIP, IP, MCP, CMC
-        (
-            mp_hands.HandLandmark.THUMB_TIP,
-            mp_hands.HandLandmark.THUMB_IP,
-            mp_hands.HandLandmark.THUMB_MCP,
-            mp_hands.HandLandmark.THUMB_CMC,
-        ),
-        # Index: TIP, PIP, DIP, MCP
+        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_IP, mp_hands.HandLandmark.THUMB_MCP),
         (
             mp_hands.HandLandmark.INDEX_FINGER_TIP,
-            mp_hands.HandLandmark.INDEX_FINGER_PIP,
-            mp_hands.HandLandmark.INDEX_FINGER_DIP,
             mp_hands.HandLandmark.INDEX_FINGER_MCP,
+            mp_hands.HandLandmark.INDEX_FINGER_PIP,
         ),
-        # Middle: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
-            mp_hands.HandLandmark.MIDDLE_FINGER_PIP,
-            mp_hands.HandLandmark.MIDDLE_FINGER_DIP,
             mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_PIP,
         ),
-        # Ring: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.RING_FINGER_TIP,
-            mp_hands.HandLandmark.RING_FINGER_PIP,
-            mp_hands.HandLandmark.RING_FINGER_DIP,
             mp_hands.HandLandmark.RING_FINGER_MCP,
+            mp_hands.HandLandmark.RING_FINGER_PIP,
         ),
-        # Pinky: TIP, PIP, DIP, MCP
         (
             mp_hands.HandLandmark.PINKY_TIP,
-            mp_hands.HandLandmark.PINKY_PIP,
-            mp_hands.HandLandmark.PINKY_DIP,
             mp_hands.HandLandmark.PINKY_MCP,
+            mp_hands.HandLandmark.PINKY_PIP,
         ),
     ]
 
     finger_closedness_values = []
 
-    for tip_idx, pip_idx, dip_idx, mcp_idx in finger_data:
+    for tip_idx, mcp_idx, pip_idx in finger_data:
         tip = landmarks[tip_idx]
-        pip = landmarks[pip_idx]
-        dip = landmarks[dip_idx]
         mcp = landmarks[mcp_idx]
+        pip = landmarks[pip_idx]
 
-        # Calculate angles at key joints
-        # For thumb: angle at IP joint (MCP-IP-TIP)
-        # For others: angle at PIP joint (MCP-PIP-DIP) and angle at DIP joint (PIP-DIP-TIP)
+        # Calculate Euclidean distance in 2D space (x, y only) to be rotation-invariant
+        # The z-coordinate (depth) varies with rotation and doesn't indicate finger bend
+        distance = ((tip.x - mcp.x) ** 2 + (tip.y - mcp.y) ** 2) ** 0.5
 
-        if tip_idx == mp_hands.HandLandmark.THUMB_TIP:
-            # Thumb: use angle at IP joint (MCP-IP-TIP)
-            # Note: for thumb, pip_idx is IP, dip_idx is MCP
-            angle_ip = calculate_angle(dip, pip, tip)  # MCP-IP-TIP
-            # For thumb, a closed finger has a smaller angle (more bent)
-            # Open thumb: ~180 degrees (π radians), Closed thumb: ~90 degrees (π/2 radians)
-            # Normalize: angle of π/2 (90°) = 1.0 (closed), angle of π (180°) = 0.0 (open)
-            normalized_angle = 1.0 - (angle_ip - math.pi / 2) / (math.pi / 2)
-            closedness = max(0.0, min(1.0, normalized_angle))
-        else:
-            # Other fingers: use angles at PIP and DIP joints
-            angle_pip = calculate_angle(mcp, pip, dip)  # Angle at PIP joint
-            angle_dip = calculate_angle(pip, dip, tip)  # Angle at DIP joint
+        # Check if finger tip is below the PIP joint (curled down)
+        # In image coordinates, higher y means lower on screen
+        tip_below_pip = tip.y > pip.y
+        
+        # Check if finger tip is below the MCP joint (very curled)
+        tip_below_mcp = tip.y > mcp.y
 
-            # Average the two angles for a more robust measure
-            avg_angle = (angle_pip + angle_dip) / 2.0
+        # Normalize distance to 0-1 range and invert (smaller distance = more closed = higher value)
+        # Use adaptive max_distance based on hand size
+        normalized_distance = min(distance / max_distance, 1.0)
+        closedness = 1.0 - normalized_distance
 
-            # Open finger: ~180 degrees (π radians), Closed finger: ~90 degrees (π/2 radians)
-            # Normalize: angle of π/2 (90°) = 1.0 (closed), angle of π (180°) = 0.0 (open)
-            normalized_angle = 1.0 - (avg_angle - math.pi / 2) / (math.pi / 2)
-            closedness = max(0.0, min(1.0, normalized_angle))
+        # Boost closedness if finger is curled down past PIP joint
+        # This handles the case where fingers are very closed but distance might not reflect it
+        if tip_below_pip:
+            # If tip is below PIP, it's definitely curled - boost closedness
+            closedness = max(closedness, 0.7)
+        
+        # If tip is below MCP, it's very tightly closed
+        if tip_below_mcp:
+            closedness = max(closedness, 0.9)
 
+        # Clamp to 0-1 range
+        closedness = max(0.0, min(1.0, closedness))
         finger_closedness_values.append(closedness)
 
+    # Average across all fingers to get overall hand closedness
     hand_closedness = sum(finger_closedness_values) / len(finger_closedness_values)
 
     return hand_closedness
+
 
 
 def get_hand_rotation(hand_landmarks, mp_hands):
@@ -220,31 +210,35 @@ UPPER_RED_1 = np.array([10, 255, 255])
 LOWER_RED_2 = np.array([160, 150, 100])
 UPPER_RED_2 = np.array([180, 255, 255])
 
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+mp_drawing = mp.solutions.drawing_utils
+
 if mode == "drone":
     try:
         tello = Tello()
         tello.connect()
         print("Tello Connected. Battery:", tello.get_battery())
         tello.streamon()
-        
+
         # --- MODIFIED: Use get_frame_read() ---
         frame_read = tello.get_frame_read()
-        
+
         if frame_read is None:
             raise Exception("Failed to get Tello frame reader.")
-            
-        time.sleep(2) # Give stream time to start
-        
+
+        time.sleep(2)  # Give stream time to start
+
         frame = frame_read.frame
         if frame is not None:
             frame_height, frame_width = frame.shape[:2]
         else:
-             print("Warning: Could not get frame dimensions, using defaults.")
+            print("Warning: Could not get frame dimensions, using defaults.")
         # --- END MODIFICATIONS ---
-        
+
         print(f"Video stream initiated: {frame_width}x{frame_height}")
         tello.takeoff()
-        tello.hover()
+        # tello.hover()
     except Exception as e:
         print(f"Failed to initialize Tello: {e}")
         if tello:
@@ -252,10 +246,8 @@ if mode == "drone":
         sys.exit(1)
 else:
     # Hand tracking setup
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-    mp_drawing = mp.solutions.drawing_utils
     device_id = select_video_device()
+
     cap = cv2.VideoCapture(device_id)
     if not cap.isOpened():
         print(f"Error: Could not open video device {device_id}")
@@ -280,162 +272,166 @@ hand_rotation = 0.0
 
 padding = 0.12
 vertical_padding = 0.2
-min_closedness = 0.05
-max_closedness = 0.75
+min_closedness = 0.15
+max_closedness = 0.7
 min_rotation = 0.42
 max_rotation = 0.58
 
+
 while running:
     try:
+        # --- HAND TRACKING LOGIC ---
         if mode == "hand":
-            # --- HAND TRACKING LOGIC ---
             ret, frame = cap.read()
             if not ret:
                 break
-
             frame = cv2.flip(frame, 1)
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_height, frame_width = frame.shape[:2]
-            results = hands.process(rgb_frame)
-
-            hand_closedness = 0.0
-            hand_rotation = 0.0
-
-            if results.multi_hand_landmarks:
-                sizes = [
-                    get_hand_size(hand_landmarks, mp_hands)
-                    for hand_landmarks in results.multi_hand_landmarks
-                ]
-                max_index = sizes.index(max(sizes))
-                hand_landmarks = results.multi_hand_landmarks[max_index]
-
-                hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
-                hand_closedness = max(
-                    min_closedness, min(max_closedness, hand_closedness)
-                )
-                hand_closedness = (hand_closedness - min_closedness) / (
-                    max_closedness - min_closedness
-                )
-                hand_openness = 1.0 - hand_closedness
-
-                hand_rotation = get_hand_rotation(hand_landmarks, mp_hands)
-                hand_rotation = max(min_rotation, min(max_rotation, hand_rotation))
-                hand_rotation = (hand_rotation - min_rotation) / (
-                    max_rotation - min_rotation
-                )
-                # Draw landmarks on the frame
-                mp_drawing.draw_landmarks(
-                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
-                )
-
-                index_finger_tip = hand_landmarks.landmark[
-                    mp_hands.HandLandmark.INDEX_FINGER_tip
-                ]
-
-                x = max(padding, min(1.0 - padding, index_finger_tip.x))
-                y = max(
-                    vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y)
-                )
-                x -= padding
-                y -= vertical_padding
-                x /= 1.0 - 2 * padding
-                y /= 1.0 - 2 * vertical_padding
-
-                tip_x = int(index_finger_tip.x * frame_width)
-                tip_y = int(index_finger_tip.y * frame_height)
-                circle_color = (255, 0, 0)
-                cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
-
-                padding_x1 = int(frame_width * padding)
-                padding_y1 = int(frame_height * vertical_padding)
-                padding_x2 = int(frame_width * (1 - padding))
-                padding_y2 = int(frame_height * (1 - vertical_padding))
-                cv2.rectangle(
-                    frame,
-                    (padding_x1, padding_y1),
-                    (padding_x2, padding_y2),
-                    (0, 255, 0),
-                    2,
-                )
-
-                hand_state_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
-                cv2.putText(
-                    frame,
-                    hand_state_text,
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    circle_color,
-                    2,
-                )
-            else:
-                hand_openness = 0.0
-                hand_rotation = 0.0
-                x = 0.0
-                y = 0.0
-
-            knob_values[0] = max(0, min(127, int(x * 127)))
-            knob_values[1] = max(0, min(127, int(y * 127)))
-            knob_values[2] = max(0, min(127, int(hand_openness * 127)))
-            knob_values[3] = max(0, min(127, int(hand_rotation * 127)))
-
-            cv2.imshow("Hand Tracking", frame)
-
         else:
-            # --- ADDED: DRONE TRACKING LOGIC ---
-
-            # 1. GET DRONE DATA
-            # --- MODIFIED: Read from frame_read ---
             frame = frame_read.frame
             if frame is None:
+                print("FRAME IS NONE")
+                time.sleep(dt)
                 continue
+            print("FRAME EXISTS", frame.shape)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # 2. OPENCV POSITIONING
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            mask1 = cv2.inRange(hsv, LOWER_RED_1, UPPER_RED_1)
-            mask2 = cv2.inRange(hsv, LOWER_RED_2, UPPER_RED_2)
-            mask = mask1 + mask2
-            mask = cv2.erode(mask, None, iterations=2)
-            mask = cv2.dilate(mask, None, iterations=2)
-            contours, _ = cv2.findContours(
-                mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        frame_height, frame_width = frame.shape[:2]
+        results = hands.process(rgb_frame)
+
+        hand_closedness = 0.0
+        hand_rotation = 0.0
+
+        if results.multi_hand_landmarks:
+            sizes = [
+                get_hand_size(hand_landmarks, mp_hands)
+                for hand_landmarks in results.multi_hand_landmarks
+            ]
+            max_index = sizes.index(max(sizes))
+            hand_landmarks = results.multi_hand_landmarks[max_index]
+
+            hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
+            hand_closedness = max(min_closedness, min(max_closedness, hand_closedness))
+            hand_closedness = (hand_closedness - min_closedness) / (
+                max_closedness - min_closedness
+            )
+            hand_openness = 1.0 - hand_closedness
+
+            hand_rotation = get_hand_rotation(hand_landmarks, mp_hands)
+            hand_rotation = max(min_rotation, min(max_rotation, hand_rotation))
+            hand_rotation = (hand_rotation - min_rotation) / (
+                max_rotation - min_rotation
+            )
+            # Draw landmarks on the frame
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            index_finger_tip = hand_landmarks.landmark[
+                mp_hands.HandLandmark.INDEX_FINGER_TIP
+            ]
+
+            x = max(padding, min(1.0 - padding, index_finger_tip.x))
+            y = max(vertical_padding, min(1.0 - vertical_padding, index_finger_tip.y))
+            x -= padding
+            y -= vertical_padding
+            x /= 1.0 - 2 * padding
+            y /= 1.0 - 2 * vertical_padding
+
+            tip_x = int(index_finger_tip.x * frame_width)
+            tip_y = int(index_finger_tip.y * frame_height)
+            circle_color = (255, 0, 0)
+            cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
+
+            padding_x1 = int(frame_width * padding)
+            padding_y1 = int(frame_height * vertical_padding)
+            padding_x2 = int(frame_width * (1 - padding))
+            padding_y2 = int(frame_height * (1 - vertical_padding))
+            cv2.rectangle(
+                frame,
+                (padding_x1, padding_y1),
+                (padding_x2, padding_y2),
+                (0, 255, 0),
+                2,
             )
 
-            x_norm, y_norm, z_norm = 0.5, 0.5, 0.0  # Default
-
-            if len(contours) > 0:
-                c = max(contours, key=cv2.contourArea)
-                M = cv2.moments(c)
-                
-                # --- KEY CHANGE: Use blob area for Z-axis (Volume) ---
-                area = cv2.contourArea(c)
-                debug_area = area # for display
-            
-                if M["m00"] > 0:
-                    x_px = int(M["m10"] / M["m00"])
-                    y_px = int(M["m01"] / M["m00"])
-                    x_norm = x_px / frame_width
-                    y_norm = y_px / frame_height
-                    cv2.circle(frame, (x_px, y_px), 10, (0, 255, 0), 2)
-
-            # Map 30cm (low) to 150cm (high) -> 0.0 (silent) to 1.0 (loud)
-            z_norm = _map_value(z_cm, 30, 150, 0.0, 1.0)
-            z_norm = max(0.0, min(1.0, z_norm))
-
-            # 3. POPULATE KNOB VALUES
-            knob_values[0] = max(0, min(127, int(x_norm * 127)))  # X-Axis
-            knob_values[1] = max(0, min(127, int(y_norm * 127)))  # Y-Axis
-            knob_values[2] = max(0, min(127, int(z_norm * 127)))  # Z-Axis (Volume)
-            knob_values[3] = 0  # Knob 3 is unused in this mode
-
-            # 4. DEBUG VIEW
-            debug_text = f"X: {x_norm:.2f} Y: {y_norm:.2f} Z: {z_norm:.2f}"
+            hand_state_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
             cv2.putText(
-                frame, debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+                frame,
+                hand_state_text,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                circle_color,
+                2,
             )
-            cv2.imshow("Tello Drone Positioning", frame)
+        else:
+            hand_openness = 0.0
+            hand_rotation = 0.0
+            x = 0.0
+            y = 0.0
 
-        # --- COMMON LOGIC (Runs for both modes) ---
+        knob_values[0] = max(0, min(127, int(x * 127)))
+        knob_values[1] = max(0, min(127, int(y * 127)))
+        knob_values[2] = max(0, min(127, int(hand_openness * 127)))
+        knob_values[3] = max(0, min(127, int(hand_rotation * 127)))
+
+        cv2.imshow("Hand Tracking", frame)
+
+        # else:
+        #     # --- ADDED: DRONE TRACKING LOGIC ---
+
+        #     # 1. GET DRONE DATA
+        #     # --- MODIFIED: Read from frame_read ---
+        #     frame = frame_read.frame
+        #     if frame is None:
+        #         continue
+
+        #     # 2. OPENCV POSITIONING
+        #     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        #     mask1 = cv2.inRange(hsv, LOWER_RED_1, UPPER_RED_1)
+        #     mask2 = cv2.inRange(hsv, LOWER_RED_2, UPPER_RED_2)
+        #     mask = mask1 + mask2
+        #     mask = cv2.erode(mask, None, iterations=2)
+        #     mask = cv2.dilate(mask, None, iterations=2)
+        #     contours, _ = cv2.findContours(
+        #         mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        #     )
+
+        #     x_norm, y_norm, z_norm = 0.5, 0.5, 0.0  # Default
+
+        #     if len(contours) > 0:
+        #         c = max(contours, key=cv2.contourArea)
+        #         M = cv2.moments(c)
+
+        #         # --- KEY CHANGE: Use blob area for Z-axis (Volume) ---
+        #         area = cv2.contourArea(c)
+        #         debug_area = area # for display
+
+        #         if M["m00"] > 0:
+        #             x_px = int(M["m10"] / M["m00"])
+        #             y_px = int(M["m01"] / M["m00"])
+        #             x_norm = x_px / frame_width
+        #             y_norm = y_px / frame_height
+        #             cv2.circle(frame, (x_px, y_px), 10, (0, 255, 0), 2)
+
+        #     # Map 30cm (low) to 150cm (high) -> 0.0 (silent) to 1.0 (loud)
+        #     z_norm = _map_value(z_cm, 30, 150, 0.0, 1.0)
+        #     z_norm = max(0.0, min(1.0, z_norm))
+
+        #     # 3. POPULATE KNOB VALUES
+        #     knob_values[0] = max(0, min(127, int(x_norm * 127)))  # X-Axis
+        #     knob_values[1] = max(0, min(127, int(y_norm * 127)))  # Y-Axis
+        #     knob_values[2] = max(0, min(127, int(z_norm * 127)))  # Z-Axis (Volume)
+        #     knob_values[3] = 0  # Knob 3 is unused in this mode
+
+        #     # 4. DEBUG VIEW
+        #     debug_text = f"X: {x_norm:.2f} Y: {y_norm:.2f} Z: {z_norm:.2f}"
+        #     cv2.putText(
+        #         frame, debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+        #     )
+        #     cv2.imshow("Tello Drone Positioning", frame)
+
+        # # --- COMMON LOGIC (Runs for both modes) ---
 
         # Send MIDI
         midiout.send_message([0xB0, 0, knob_values[0]])
@@ -458,7 +454,7 @@ while running:
 
 # --- MODIFIED: Cleanup logic ---
 if mode == "hand":
-    if 'cap' in locals() and cap.isOpened():
+    if "cap" in locals() and cap.isOpened():
         cap.release()
 else:
     if tello:
