@@ -9,16 +9,12 @@ import math
 import numpy as np
 from djitellopy import Tello
 
-# --- NEW: PID Controller Gains for Follow Mode ---
-# These control how "aggressive" the drone is.
-# Start with these, and "tune" (change) them to make it smoother.
-P_GAIN_YAW = 0.6  # Gain for left/right (yaw)
-P_GAIN_UD = 0.7   # Gain for up/down
-P_GAIN_FB = 0.4   # Gain for forward/backward (hand size)
+# --- MODIFIED: Kept only the Up/Down gain ---
+P_GAIN_UD = 0.7   # Gain for up/down (altitude)
 
-# Target Hand Size: How "big" we want the hand to be (how close the drone should be)
-# Tune this by holding your hand up and seeing what "Size" value it prints.
-TARGET_HAND_SIZE = 0.3 
+# --- NEW: Altitude Range (3ft to 4ft in cm) ---
+MIN_ALTITUDE_CM = 91  # 3 feet
+MAX_ALTITUDE_CM = 122 # 4 feet
 # ---
 
 def list_video_devices():
@@ -81,61 +77,64 @@ def get_hand_closedness(hand_landmarks, mp_hands):
     # Get landmarks
     landmarks = hand_landmarks.landmark
 
-    hand_size = get_hand_size(hand_landmarks, mp_hands)
-    max_distance = hand_size * 0.75
-
-    # Define finger tip, MCP (metacarpophalangeal), and PIP (proximal interphalangeal) joints
+    # Define finger joints
     finger_data = [
-        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.THUMB_IP, mp_hands.HandLandmark.THUMB_MCP),
+        (
+            mp_hands.HandLandmark.THUMB_TIP,
+            mp_hands.HandLandmark.THUMB_IP,
+            mp_hands.HandLandmark.THUMB_MCP,
+            mp_hands.HandLandmark.THUMB_CMC,
+        ),
         (
             mp_hands.HandLandmark.INDEX_FINGER_TIP,
-            mp_hands.HandLandmark.INDEX_FINGER_MCP,
             mp_hands.HandLandmark.INDEX_FINGER_PIP,
+            mp_hands.HandLandmark.INDEX_FINGER_DIP,
+            mp_hands.HandLandmark.INDEX_FINGER_MCP,
         ),
         (
             mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
-            mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
             mp_hands.HandLandmark.MIDDLE_FINGER_PIP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_DIP,
+            mp_hands.HandLandmark.MIDDLE_FINGER_MCP,
         ),
         (
             mp_hands.HandLandmark.RING_FINGER_TIP,
-            mp_hands.HandLandmark.RING_FINGER_MCP,
             mp_hands.HandLandmark.RING_FINGER_PIP,
+            mp_hands.HandLandmark.RING_FINGER_DIP,
+            mp_hands.HandLandmark.RING_FINGER_MCP,
         ),
         (
             mp_hands.HandLandmark.PINKY_TIP,
-            mp_hands.HandLandmark.PINKY_MCP,
             mp_hands.HandLandmark.PINKY_PIP,
+            mp_hands.HandLandmark.PINKY_DIP,
+            mp_hands.HandLandmark.PINKY_MCP,
         ),
     ]
 
     finger_closedness_values = []
 
-    for tip_idx, mcp_idx, pip_idx in finger_data:
+    for tip_idx, pip_idx, dip_idx, mcp_idx in finger_data:
         tip = landmarks[tip_idx]
-        mcp = landmarks[mcp_idx]
         pip = landmarks[pip_idx]
+        dip = landmarks[dip_idx]
+        mcp = landmarks[mcp_idx]
 
-        distance = ((tip.x - mcp.x) ** 2 + (tip.y - mcp.y) ** 2) ** 0.5
-        tip_below_pip = tip.y > pip.y
-        tip_below_mcp = tip.y > mcp.y
+        if tip_idx == mp_hands.HandLandmark.THUMB_TIP:
+            angle_ip = calculate_angle(dip, pip, tip)  # MCP-IP-TIP
+            normalized_angle = 1.0 - (angle_ip - math.pi / 2) / (math.pi / 2)
+            closedness = max(0.0, min(1.0, normalized_angle))
+        else:
+            angle_pip = calculate_angle(mcp, pip, dip)  # Angle at PIP joint
+            angle_dip = calculate_angle(pip, dip, tip)  # Angle at DIP joint
+            avg_angle = (angle_pip + angle_dip) / 2.0
+            normalized_angle = 1.0 - (avg_angle - math.pi / 2) / (math.pi / 2)
+            closedness = max(0.0, min(1.0, normalized_angle))
 
-        normalized_distance = min(distance / max_distance, 1.0)
-        closedness = 1.0 - normalized_distance
-
-        if tip_below_pip:
-            closedness = max(closedness, 0.7)
-        
-        if tip_below_mcp:
-            closedness = max(closedness, 0.9)
-
-        closedness = max(0.0, min(1.0, closedness))
         finger_closedness_values.append(closedness)
 
     hand_closedness = sum(finger_closedness_values) / len(finger_closedness_values)
 
     return hand_closedness
-
 
 
 def get_hand_rotation(hand_landmarks, mp_hands):
@@ -185,8 +184,8 @@ def _map_value(x, in_min, in_max, out_min, out_max):
     """Helper function to map a value from one range to another."""
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
 
-# --- NEW: Helper function to clamp speed values ---
 def clamp(n, minn, maxn):
+    """Helper function to clamp a value."""
     return max(min(maxn, n), minn)
 
 
@@ -202,11 +201,11 @@ video_capture = None # Use this instead of frame_read
 frame_width = 960  # default
 frame_height = 720  # default
 
-# --- REMOVED Red Marker Logic ---
-
+# --- MODIFIED: Initialize MediaPipe for BOTH modes ---
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
+# ---
 
 if mode == "drone":
     try:
@@ -214,21 +213,25 @@ if mode == "drone":
         tello.connect()
         print("Tello Connected. Battery:", tello.get_battery())
         tello.streamon()
-
-        # --- MODIFIED: Use the OpenCV/firewall workaround ---
+        
+        # --- THIS IS THE FIREWALL FIX ---
+        # Get the stream URL and open it with OpenCV
         stream_url = tello.get_stream_url()
         print(f"Opening video stream at: {stream_url}")
         video_capture = cv2.VideoCapture(stream_url)
+        # --- END FIX ---
         
         if not video_capture.isOpened():
             raise Exception("Failed to get Tello video capture with OpenCV.")
-        # --- END MODIFICATION ---
-
-        frame = video_capture.read()[1] # Read one frame to get size
-        if frame is not None:
-            frame_height, frame_width = frame.shape[:2]
-        else:
+        
+        # Get frame dimensions from the video capture
+        frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        if frame_height == 0 or frame_width == 0:
             print("Warning: Could not get frame dimensions, using defaults.")
+            frame_width = 960
+            frame_height = 720
         
         print(f"Video stream initiated: {frame_width}x{frame_height}")
         tello.takeoff()
@@ -239,9 +242,8 @@ if mode == "drone":
             tello.land()
         sys.exit(1)
 else:
-    # Hand tracking setup
+    # Hand tracking setup (webcam)
     device_id = select_video_device()
-
     cap = cv2.VideoCapture(device_id)
     if not cap.isOpened():
         print(f"Error: Could not open video device {device_id}")
@@ -268,8 +270,8 @@ hand_rotation = 0.0
 
 padding = 0.12
 vertical_padding = 0.2
-min_closedness = 0.15
-max_closedness = 0.7
+min_closedness = 0.05
+max_closedness = 0.75
 min_rotation = 0.42
 max_rotation = 0.58
 
@@ -297,7 +299,7 @@ while running:
         rgb_frame.flags.writeable = True
 
         frame_height, frame_width = frame.shape[:2]
-        
+
         # Calculate bounding box in pixels
         padding_x1 = int(frame_width * padding)
         padding_y1 = int(frame_height * vertical_padding)
@@ -317,6 +319,9 @@ while running:
         hand_rotation = 0.0
         
         debug_text = "No Hand Found"
+        
+        # --- NEW: Initialize drone speeds to 0 ---
+        ud_speed = 0
 
         if results.multi_hand_landmarks:
             sizes = [
@@ -325,8 +330,6 @@ while running:
             ]
             max_index = sizes.index(max(sizes))
             hand_landmarks = results.multi_hand_landmarks[max_index]
-            
-            hand_size = sizes[max_index]
 
             hand_closedness = get_hand_closedness(hand_landmarks, mp_hands)
             hand_closedness = max(min_closedness, min(max_closedness, hand_closedness))
@@ -355,66 +358,43 @@ while running:
             tip_x = int(x_norm * frame_width)
             tip_y = int(y_norm * frame_height)
             
-            # --- NEW DRONE FOLLOW LOGIC ---
+            # Calculate x, y relative to the *inside* of the box
+            x = (tip_x - padding_x1) / (padding_x2 - padding_x1)
+            x = clamp(x, 0.0, 1.0) # Clamp to 0-1
+            y = (tip_y - padding_y1) / (padding_y2 - padding_y1)
+            y = clamp(y, 0.0, 1.0) # Clamp to 0-1
+            
+            # --- MODIFIED: DRONE "CONDUCTOR" LOGIC ---
             if mode == "drone":
-                # Check if hand is INSIDE the bounding box
-                if (padding_x1 < tip_x < padding_x2) and (padding_y1 < tip_y < padding_y2):
-                    # --- INSIDE BOX (Music Mode) ---
-                    debug_text = "INSIDE BOX: Hovering"
-                    # Drone hovers
-                    tello.send_rc_control(0, 0, 0, 0)
-                    
-                    # Calculate x, y relative to the *inside* of the box
-                    x = (tip_x - padding_x1) / (padding_x2 - padding_x1)
-                    y = (tip_y - padding_y1) / (padding_y2 - padding_y1)
+                # 1. Volume/Altitude Control
+                # Map hand openness (0-1) to target altitude in cm
+                target_altitude = _map_value(hand_openness, 0.0, 1.0, MIN_ALTITUDE_CM, MAX_ALTITUDE_CM)
+                # Get current altitude
+                current_altitude = tello.get_height() # This uses the TOF sensor
                 
-                else:
-                    # --- OUTSIDE BOX (Follow Mode) ---
-                    debug_text = "OUTSIDE BOX: Following"
-                    
-                    # Calculate error from *center of frame*
-                    target_x_norm = 0.5
-                    target_y_norm = 0.5
-                    
-                    error_x = x_norm - target_x_norm
-                    error_y = y_norm - target_y_norm
-                    error_z = TARGET_HAND_SIZE - hand_size
-                    
-                    # Calculate speeds
-                    # Y is inverted (negative is UP)
-                    # X is inverted for yaw (negative is rotate LEFT)
-                    yaw_speed = int(-error_x * 100 * P_GAIN_YAW)
-                    ud_speed = int(-error_y * 100 * P_GAIN_UD)
-                    fb_speed = int(error_z * 100 * P_GAIN_FB)
-                    
-                    # Clamp speeds
-                    yaw_speed = clamp(yaw_speed, -50, 50)
-                    ud_speed = clamp(ud_speed, -50, 50)
-                    fb_speed = clamp(fb_speed, -30, 30) # F/B is more sensitive
-                    
-                    # Send follow command
-                    tello.send_rc_control(0, fb_speed, ud_speed, yaw_speed)
-
-                    # Calculate x,y as if it were in the box
-                    x = max(padding, min(1.0 - padding, x_norm))
-                    y = max(vertical_padding, min(1.0 - vertical_padding, y_norm))
-                    x -= padding
-                    y -= vertical_padding
-                    x /= 1.0 - 2 * padding
-                    y /= 1.0 - 2 * padding
-                    
+                # Calculate altitude error and speed
+                altitude_error = target_altitude - current_altitude
+                ud_speed = int(altitude_error * P_GAIN_UD)
+                ud_speed = clamp(ud_speed, -40, 40) # Clamp speed
+                
+                # Map the *actual* altitude to the volume knob
+                volume_norm = _map_value(current_altitude, MIN_ALTITUDE_CM, MAX_ALTITUDE_CM, 0.0, 1.0)
+                volume_norm = clamp(volume_norm, 0.0, 1.0)
+                knob_values[2] = max(0, min(127, int(volume_norm * 127)))
+                
+                # --- REMOVED auto-yaw and auto-fb ---
+                
+                # Send ONLY the up/down command
+                tello.send_rc_control(0, 0, ud_speed, 0)
+                
+                debug_text = f"TargetAlt: {target_altitude:.0f}cm | CurrentAlt: {current_altitude}cm"
+                
             else: # Hand mode logic
                 # --- Original Hand Mode Logic ---
-                x = max(padding, min(1.0 - padding, x_norm))
-                y = max(vertical_padding, min(1.0 - vertical_padding, y_norm))
-                x -= padding
-                y -= vertical_padding
-                x /= 1.0 - 2 * padding
-                y /= 1.0 - 2 * padding 
-                
                 circle_color = (255, 0, 0)
                 cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
                 debug_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
+                knob_values[2] = max(0, min(127, int(hand_openness * 127))) # Hand mode uses openness for Knob 2
 
         else:
             # --- NO HAND FOUND ---
@@ -427,13 +407,14 @@ while running:
                 # Hover in place
                 tello.send_rc_control(0, 0, 0, 0)
                 debug_text = "No Hand Found. Hovering."
+                knob_values[2] = 0 # No hand, volume = 0
 
         # --- COMMON LOGIC ---
         
-        # Populate MIDI knobs (This stays the same, as requested)
+        # Populate MIDI knobs
         knob_values[0] = max(0, min(127, int(x * 127)))
         knob_values[1] = max(0, min(127, int(y * 127)))
-        knob_values[2] = max(0, min(127, int(hand_openness * 127)))
+        # Knob 2 is set differently by each mode now
         knob_values[3] = max(0, min(127, int(hand_rotation * 127)))
         
         # Send MIDI
@@ -469,7 +450,7 @@ while running:
 if mode == "hand":
     if 'cap' in locals() and cap.isOpened():
         cap.release()
-else: # "drone" or "follow"
+else: # "drone"
     if tello:
         print("Landing drone...")
         # Send one last stop command before landing
