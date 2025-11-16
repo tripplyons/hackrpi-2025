@@ -13,8 +13,8 @@ from djitellopy import Tello
 P_GAIN_UD = 0.7  # Gain for up/down (altitude)
 
 # --- NEW: Altitude Range (3ft to 4ft in cm) ---
-MIN_ALTITUDE_CM = 91  # 3 feet
-MAX_ALTITUDE_CM = 122  # 4 feet
+MIN_ALTITUDE_CM = 60  # 3 feet
+MAX_ALTITUDE_CM = 160  # 4 feet
 # ---
 
 
@@ -80,12 +80,6 @@ def get_hand_closedness(hand_landmarks, mp_hands):
 
     # Define finger joints
     finger_data = [
-        (
-            mp_hands.HandLandmark.THUMB_TIP,
-            mp_hands.HandLandmark.THUMB_IP,
-            mp_hands.HandLandmark.THUMB_MCP,
-            mp_hands.HandLandmark.THUMB_CMC,
-        ),
         (
             mp_hands.HandLandmark.INDEX_FINGER_TIP,
             mp_hands.HandLandmark.INDEX_FINGER_PIP,
@@ -274,7 +268,7 @@ hand_rotation = 0.0
 padding = 0.12
 vertical_padding = 0.2
 min_closedness = 0.05
-max_closedness = 0.8
+max_closedness = 0.9
 min_rotation = 0.42
 max_rotation = 0.58
 
@@ -286,7 +280,6 @@ while running:
             ret, frame = cap.read()
             if not ret:
                 break
-            frame = cv2.flip(frame, 1)  # Flip webcam
         else:  # "drone" mode
             frame = frame_read.frame
             if frame is None:
@@ -294,6 +287,8 @@ while running:
                 time.sleep(dt)
                 continue
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        frame = cv2.flip(frame, 1)  # Flip webcam
 
         # --- COMMON LOGIC ---
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -381,19 +376,13 @@ while running:
                 ud_speed = int(altitude_error * P_GAIN_UD)
                 ud_speed = clamp(ud_speed, -40, 40)  # Clamp speed
 
-                knob_values[2] = max(0, min(127, int(hand_openness * 127)))
                 tello.send_rc_control(0, 0, ud_speed, 0)  # (lr, fb, ud, yaw)
 
-                debug_text = f"TargetAlt: {target_altitude:.0f}cm | CurrentAlt: {current_altitude}cm"
-
+                debug_text = f"TargetAlt: {target_altitude:.0f}cm, CurrentAlt: {current_altitude}cm, X: {x:.2f}, Y: {y:.2f}, Openness: {hand_openness:.2f}, Rotation: {hand_rotation:.2f}"
             else:
                 circle_color = (255, 0, 0)
                 cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
                 debug_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
-                knob_values[2] = max(
-                    0, min(127, int(hand_openness * 127))
-                )  # Hand mode uses openness for Knob 2
-
         else:
             hand_openness = 0.0
             hand_rotation = 0.0
@@ -403,11 +392,10 @@ while running:
             if mode == "drone":
                 tello.send_rc_control(0, 0, 0, 0)
                 debug_text = "No Hand Found. Hovering."
-                knob_values[2] = 0  # No hand, volume = 0
 
         knob_values[0] = max(0, min(127, int(x * 127)))
         knob_values[1] = max(0, min(127, int(y * 127)))
-        # Knob 2 is set differently by each mode now
+        knob_values[2] = max(0, min(127, int(hand_openness * 127)))
         knob_values[3] = max(0, min(127, int(hand_rotation * 127)))
 
         # Send MIDI
