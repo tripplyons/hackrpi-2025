@@ -366,7 +366,6 @@ while running:
             
             # --- MODIFIED: DRONE "CONDUCTOR" LOGIC ---
             if mode == "drone":
-                # 1. Volume/Altitude Control
                 # Map hand openness (0-1) to target altitude in cm
                 target_altitude = _map_value(hand_openness, 0.0, 1.0, MIN_ALTITUDE_CM, MAX_ALTITUDE_CM)
                 # Get current altitude
@@ -377,41 +376,29 @@ while running:
                 ud_speed = int(altitude_error * P_GAIN_UD)
                 ud_speed = clamp(ud_speed, -40, 40) # Clamp speed
                 
-                # Map the *actual* altitude to the volume knob
-                volume_norm = _map_value(current_altitude, MIN_ALTITUDE_CM, MAX_ALTITUDE_CM, 0.0, 1.0)
-                volume_norm = clamp(volume_norm, 0.0, 1.0)
-                knob_values[2] = max(0, min(127, int(volume_norm * 127)))
-                
-                # --- REMOVED auto-yaw and auto-fb ---
-                
-                # Send ONLY the up/down command
-                tello.send_rc_control(0, 0, ud_speed, 0)
+                knob_values[2] = max(0, min(127, int(hand_openness * 127)))                
+                tello.send_rc_control(0, 0, ud_speed, 0) # (lr, fb, ud, yaw)
                 
                 debug_text = f"TargetAlt: {target_altitude:.0f}cm | CurrentAlt: {current_altitude}cm"
                 
-            else: # Hand mode logic
-                # --- Original Hand Mode Logic ---
+            else:
                 circle_color = (255, 0, 0)
                 cv2.circle(frame, (tip_x, tip_y), 32, circle_color, 8)
                 debug_text = f"X: {x:.2f} Y: {y:.2f} Openness: {hand_openness:.2f} Rotation: {hand_rotation:.2f}"
                 knob_values[2] = max(0, min(127, int(hand_openness * 127))) # Hand mode uses openness for Knob 2
 
         else:
-            # --- NO HAND FOUND ---
             hand_openness = 0.0
             hand_rotation = 0.0
             x = 0.0
             y = 0.0
             
             if mode == "drone":
-                # Hover in place
                 tello.send_rc_control(0, 0, 0, 0)
                 debug_text = "No Hand Found. Hovering."
                 knob_values[2] = 0 # No hand, volume = 0
 
-        # --- COMMON LOGIC ---
         
-        # Populate MIDI knobs
         knob_values[0] = max(0, min(127, int(x * 127)))
         knob_values[1] = max(0, min(127, int(y * 127)))
         # Knob 2 is set differently by each mode now
