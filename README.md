@@ -6,6 +6,10 @@ Physically controlled generative music
 
 [Devpost](https://devpost.com/software/synthwave-8fgo0c)
 
+[Youtube Webcam Demo](https://youtu.be/fB2qbgKe9yw)
+
+[Youtube Tello Drone Demo](https://youtube.com/shorts/Q5GYdat9SSQ)
+
 ## Setup
 
 - Install [`uv`](https://docs.astral.sh/uv/)
